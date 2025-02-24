@@ -16,22 +16,55 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Create tenants table
+// Create tenants and properties tables
 (async () => {
   try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS properties (
+        id SERIAL PRIMARY KEY,
+        address TEXT,
+        units INTEGER,
+        owner_id INTEGER,
+        value REAL
+      )
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tenants (
         id SERIAL PRIMARY KEY,
         name TEXT,
-        property_id INTEGER,
+        property_id INTEGER REFERENCES properties(id),
         rent REAL
       )
     `);
-    console.log('Tenants table created or already exists');
+    console.log('Properties and Tenants tables created or already exist');
   } catch (err) {
     console.error('Table creation failed:', err);
   }
 })();
+
+// Get all properties
+app.get('/properties', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM properties');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Add a property
+app.post('/properties', async (req, res) => {
+  const { address, units, owner_id, value } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO properties (address, units, owner_id, value) VALUES ($1, $2, $3, $4) RETURNING *',
+      [address, units, owner_id, value]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
 
 // Get all tenants
 app.get('/tenants', async (req, res) => {
