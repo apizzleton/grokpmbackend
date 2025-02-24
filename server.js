@@ -1,13 +1,20 @@
 const express = require('express');
 const { Pool } = require('pg');
+const cors = require('cors');
 require('dotenv').config();
 const app = express();
 app.use(express.json());
 
+// Enable CORS for localhost:3000 (and optionally all origins)
+app.use(cors({
+  origin: 'http://localhost:3000' // Allow only localhost:3000 for now
+  // For all origins, use: origin: '*'
+}));
+
 const pool = new Pool({
-    connectionString: process.env.DB_CONNECTION_STRING,
-    ssl: { rejectUnauthorized: false }
-  });
+  connectionString: process.env.DB_CONNECTION_STRING,
+  ssl: { rejectUnauthorized: false }
+});
 
 // Create tenants table
 (async () => {
