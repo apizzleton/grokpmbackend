@@ -7,7 +7,7 @@ app.use(express.json());
 
 // Enable CORS for localhost:3000 and production URL
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'] // Allow both local and live frontend
+  origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com']
 }));
 
 const pool = new Pool({
@@ -15,7 +15,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Create tables for properties, units, tenants, payments, maintenance, and associations
+// Create tables for all entities, including owners and board members
 (async () => {
   try {
     await pool.query(`
@@ -89,9 +89,112 @@ const pool = new Pool({
         due_date DATE
       )
     `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS owners (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        email TEXT,
+        phone TEXT,
+        property_id INTEGER REFERENCES properties(id)
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS board_members (
+        id SERIAL PRIMARY KEY,
+        name TEXT,
+        email TEXT,
+        phone TEXT,
+        association_id INTEGER REFERENCES associations(id)
+      )
+    `);
     console.log('All tables created or already exist');
   } catch (err) {
     console.error('Table creation failed:', err);
+  }
+})();
+
+// Insert dummy data into all tables
+(async () => {
+  try {
+    // Users (for authentication)
+    await pool.query(`
+      INSERT INTO users (email, password, role) VALUES
+      ('admin@example.com', 'password123', 'owner'),
+      ('manager@example.com', 'password123', 'manager'),
+      ('tenant@example.com', 'password123', 'tenant')
+      ON CONFLICT (email) DO NOTHING
+    `);
+
+    // Properties
+    await pool.query(`
+      INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES
+      ('123 Main St', 'New York', 'NY', '10001', 1, 500000),
+      ('456 Oak Ave', 'Los Angeles', 'CA', '90001', 1, 600000)
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Units
+    await pool.query(`
+      INSERT INTO units (property_id, unit_number, rent_amount, status) VALUES
+      (1, '1A', 1500, 'occupied'),
+      (1, '1B', 1400, 'vacant'),
+      (2, '2A', 1600, 'occupied'),
+      (2, '2B', 1450, 'vacant')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Tenants
+    await pool.query(`
+      INSERT INTO tenants (unit_id, name, email, phone, lease_start_date, lease_end_date, rent) VALUES
+      (1, 'John Doe', 'john@example.com', '555-0101', '2024-01-01', '2025-12-31', 1500),
+      (3, 'Jane Smith', 'jane@example.com', '555-0102', '2024-02-01', '2025-12-31', 1600)
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Payments
+    await pool.query(`
+      INSERT INTO payments (tenant_id, amount, payment_date, status) VALUES
+      (1, 1500, '2025-02-01', 'paid'),
+      (2, 1600, '2025-02-01', 'paid'),
+      (1, 1500, '2025-01-01', 'paid')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Maintenance
+    await pool.query(`
+      INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES
+      (1, 1, 'Fix leaky faucet', '2025-01-15', 'completed', 150, '2025-01-20'),
+      (2, 2, 'Repair AC', '2025-02-10', 'in-progress', 300, NULL)
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Associations
+    await pool.query(`
+      INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES
+      (1, 'Main St HOA', 'hoa@mainst.com, 555-0201', 200, '2025-03-01'),
+      (2, 'Oak Ave Association', 'oa@oakave.com, 555-0202', 250, '2025-03-01')
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Owners
+    await pool.query(`
+      INSERT INTO owners (name, email, phone, property_id) VALUES
+      ('Alice Johnson', 'alice@example.com', '555-0301', 1),
+      ('Bob Wilson', 'bob@example.com', '555-0302', 2)
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    // Board Members
+    await pool.query(`
+      INSERT INTO board_members (name, email, phone, association_id) VALUES
+      ('Carol Davis', 'carol@example.com', '555-0401', 1),
+      ('David Brown', 'david@example.com', '555-0402', 2)
+      ON CONFLICT (id) DO NOTHING
+    `);
+
+    console.log('Dummy data inserted or already exists');
+  } catch (err) {
+    console.error('Dummy data insertion failed:', err);
   }
 })();
 
@@ -122,7 +225,7 @@ const authenticateToken = (req, res, next) => {
   });
 };
 
-// Properties
+// Properties, Units, Tenants, Payments, Maintenance, Associations (existing endpoints remain the same)
 app.get('/properties', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM properties WHERE owner_id = $1', [req.user.id]);
@@ -145,7 +248,6 @@ app.post('/properties', authenticateToken, async (req, res) => {
   }
 });
 
-// Units
 app.get('/units', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM units');
@@ -168,7 +270,6 @@ app.post('/units', authenticateToken, async (req, res) => {
   }
 });
 
-// Tenants
 app.get('/tenants', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM tenants');
@@ -191,7 +292,6 @@ app.post('/tenants', authenticateToken, async (req, res) => {
   }
 });
 
-// Payments
 app.get('/payments', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM payments');
@@ -214,7 +314,6 @@ app.post('/payments', authenticateToken, async (req, res) => {
   }
 });
 
-// Maintenance
 app.get('/maintenance', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM maintenance');
@@ -237,7 +336,6 @@ app.post('/maintenance', authenticateToken, async (req, res) => {
   }
 });
 
-// Associations
 app.get('/associations', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM associations');
@@ -253,6 +351,52 @@ app.post('/associations', authenticateToken, async (req, res) => {
     const { rows } = await pool.query(
       'INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES ($1, $2, $3, $4, $5) RETURNING *',
       [property_id, name, contact_info, fee, due_date]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Owners
+app.get('/owners', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM owners');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+app.post('/owners', authenticateToken, async (req, res) => {
+  const { name, email, phone, property_id } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO owners (name, email, phone, property_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email, phone, property_id]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Board Members
+app.get('/board-members', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM board_members');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+app.post('/board-members', authenticateToken, async (req, res) => {
+  const { name, email, phone, association_id } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO board_members (name, email, phone, association_id) VALUES ($1, $2, $3, $4) RETURNING *',
+      [name, email, phone, association_id]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
