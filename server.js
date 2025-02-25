@@ -53,13 +53,13 @@ const recreateTables = async () => {
   }
 };
 
-// Create tables for all entities
+// Create and populate tables sequentially
 (async () => {
   try {
     // Drop and recreate tables to ensure schema matches
     await recreateTables();
 
-    console.log('Creating tables...');
+    console.log('Creating tables sequentially...');
     // Users
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -69,6 +69,8 @@ const recreateTables = async () => {
         role TEXT DEFAULT 'owner' CHECK (role IN ('owner', 'manager', 'tenant'))
       )
     `);
+    console.log('Users table created or already exists');
+
     // Properties
     await pool.query(`
       CREATE TABLE IF NOT EXISTS properties (
@@ -81,6 +83,8 @@ const recreateTables = async () => {
         value REAL NOT NULL
       )
     `);
+    console.log('Properties table created or already exists');
+
     // Units
     await pool.query(`
       CREATE TABLE IF NOT EXISTS units (
@@ -91,6 +95,8 @@ const recreateTables = async () => {
         status TEXT DEFAULT 'vacant' CHECK (status IN ('occupied', 'vacant'))
       )
     `);
+    console.log('Units table created or already exists');
+
     // Tenants
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tenants (
@@ -104,6 +110,8 @@ const recreateTables = async () => {
         rent REAL NOT NULL
       )
     `);
+    console.log('Tenants table created or already exists');
+
     // Payments
     await pool.query(`
       CREATE TABLE IF NOT EXISTS payments (
@@ -114,6 +122,8 @@ const recreateTables = async () => {
         status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'late', 'pending'))
       )
     `);
+    console.log('Payments table created or already exists');
+
     // Maintenance
     await pool.query(`
       CREATE TABLE IF NOT EXISTS maintenance (
@@ -127,6 +137,8 @@ const recreateTables = async () => {
         completion_date DATE
       )
     `);
+    console.log('Maintenance table created or already exists');
+
     // Associations
     await pool.query(`
       CREATE TABLE IF NOT EXISTS associations (
@@ -138,6 +150,8 @@ const recreateTables = async () => {
         due_date DATE NOT NULL
       )
     `);
+    console.log('Associations table created or already exists');
+
     // Owners
     await pool.query(`
       CREATE TABLE IF NOT EXISTS owners (
@@ -148,6 +162,8 @@ const recreateTables = async () => {
         property_id INTEGER REFERENCES properties(id) NOT NULL
       )
     `);
+    console.log('Owners table created or already exists');
+
     // Board Members
     await pool.query(`
       CREATE TABLE IF NOT EXISTS board_members (
@@ -158,16 +174,18 @@ const recreateTables = async () => {
         association_id INTEGER REFERENCES associations(id) NOT NULL
       )
     `);
+    console.log('Board Members table created or already exists');
+
     console.log('All tables created or already exist');
   } catch (err) {
     console.error('Table creation failed:', err);
   }
 })();
 
-// Insert dummy data
+// Insert dummy data sequentially after all tables are created
 (async () => {
   try {
-    console.log('Inserting dummy data...');
+    console.log('Inserting dummy data sequentially...');
     // Users
     await pool.query(`
       INSERT INTO users (email, password, role) VALUES
@@ -176,6 +194,7 @@ const recreateTables = async () => {
       ('tenant@example.com', 'password123', 'tenant')
       ON CONFLICT (email) DO NOTHING
     `);
+    console.log('Users dummy data inserted or already exists');
 
     // Properties
     await pool.query(`
@@ -184,6 +203,7 @@ const recreateTables = async () => {
       ('456 Oak Ave', 'Los Angeles', 'CA', '90001', 1, 600000)
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Properties dummy data inserted or already exists');
 
     // Units
     await pool.query(`
@@ -194,6 +214,7 @@ const recreateTables = async () => {
       (2, '2B', 1450, 'vacant')
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Units dummy data inserted or already exists');
 
     // Tenants
     await pool.query(`
@@ -202,6 +223,7 @@ const recreateTables = async () => {
       (3, 'Jane Smith', 'jane@example.com', '555-0102', '2024-02-01', '2025-12-31', 1600)
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Tenants dummy data inserted or already exists');
 
     // Payments
     await pool.query(`
@@ -211,6 +233,7 @@ const recreateTables = async () => {
       (1, 1500, '2025-01-01', 'paid')
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Payments dummy data inserted or already exists');
 
     // Maintenance
     await pool.query(`
@@ -219,6 +242,7 @@ const recreateTables = async () => {
       (2, 2, 'Repair AC', '2025-02-10', 'in-progress', 300, NULL)
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Maintenance dummy data inserted or already exists');
 
     // Associations
     await pool.query(`
@@ -227,6 +251,7 @@ const recreateTables = async () => {
       (2, 'Oak Ave Association', 'oa@oakave.com, 555-0202', 250, '2025-03-01')
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Associations dummy data inserted or already exists');
 
     // Owners
     await pool.query(`
@@ -235,6 +260,7 @@ const recreateTables = async () => {
       ('Bob Wilson', 'bob@example.com', '555-0302', 2)
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Owners dummy data inserted or already exists');
 
     // Board Members
     await pool.query(`
@@ -243,8 +269,9 @@ const recreateTables = async () => {
       ('David Brown', 'david@example.com', '555-0402', 2)
       ON CONFLICT (id) DO NOTHING
     `);
+    console.log('Board Members dummy data inserted or already exists');
 
-    console.log('Dummy data inserted or already exists');
+    console.log('All dummy data inserted or already exists');
   } catch (err) {
     console.error('Dummy data insertion failed:', err);
   }
@@ -293,6 +320,16 @@ app.get('/properties', async (req, res) => {
 app.get('/schema/properties', async (req, res) => {
   try {
     const schema = await checkTableSchema('properties');
+    res.json(schema);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Diagnostic endpoint to check payments table schema
+app.get('/schema/payments', async (req, res) => {
+  try {
+    const schema = await checkTableSchema('payments');
     res.json(schema);
   } catch (err) {
     res.status(500).send(err.message);
