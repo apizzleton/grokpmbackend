@@ -37,6 +37,8 @@ const recreateTables = async () => {
   try {
     console.log('Checking current schema before dropping tables...');
     const propertiesSchema = await checkTableSchema('properties');
+    const paymentsSchema = await checkTableSchema('payments');
+    const maintenanceSchema = await checkTableSchema('maintenance');
     console.log('Dropping existing tables...');
     await pool.query('DROP TABLE IF EXISTS board_members CASCADE');
     await pool.query('DROP TABLE IF EXISTS owners CASCADE');
@@ -53,127 +55,164 @@ const recreateTables = async () => {
   }
 };
 
-// Create and populate tables sequentially
+// Function to check if a table exists
+const tableExists = async (tableName) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM pg_tables
+        WHERE schemaname = 'public' AND tablename = $1
+      )
+    `, [tableName]);
+    return rows[0].exists;
+  } catch (err) {
+    console.error(`Error checking if ${tableName} exists:`, err);
+    return false;
+  }
+};
+
+// Create and populate tables sequentially with dependency checks
 (async () => {
   try {
     // Drop and recreate tables to ensure schema matches
     await recreateTables();
 
-    console.log('Creating tables sequentially...');
+    console.log('Creating tables sequentially with dependency checks...');
     // Users
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS users (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE NOT NULL,
-        password TEXT NOT NULL,
-        role TEXT DEFAULT 'owner' CHECK (role IN ('owner', 'manager', 'tenant'))
-      )
-    `);
+    if (!(await tableExists('users'))) {
+      await pool.query(`
+        CREATE TABLE users (
+          id SERIAL PRIMARY KEY,
+          email TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          role TEXT DEFAULT 'owner' CHECK (role IN ('owner', 'manager', 'tenant'))
+        )
+      `);
+    }
     console.log('Users table created or already exists');
 
-    // Properties
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS properties (
-        id SERIAL PRIMARY KEY,
-        address TEXT NOT NULL,
-        city TEXT NOT NULL,
-        state TEXT NOT NULL,
-        zip TEXT NOT NULL,
-        owner_id INTEGER REFERENCES users(id),
-        value REAL NOT NULL
-      )
-    `);
+    // Wait for users to be available
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay to ensure table is ready
+
+    // Properties (depends on users)
+    if (!(await tableExists('properties'))) {
+      await pool.query(`
+        CREATE TABLE properties (
+          id SERIAL PRIMARY KEY,
+          address TEXT NOT NULL,
+          city TEXT NOT NULL,
+          state TEXT NOT NULL,
+          zip TEXT NOT NULL,
+          owner_id INTEGER REFERENCES users(id),
+          value REAL NOT NULL
+        )
+      `);
+    }
     console.log('Properties table created or already exists');
 
-    // Units
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS units (
-        id SERIAL PRIMARY KEY,
-        property_id INTEGER REFERENCES properties(id) NOT NULL,
-        unit_number TEXT NOT NULL,
-        rent_amount REAL NOT NULL,
-        status TEXT DEFAULT 'vacant' CHECK (status IN ('occupied', 'vacant'))
-      )
-    `);
+    // Units (depends on properties)
+    if (!(await tableExists('units'))) {
+      await pool.query(`
+        CREATE TABLE units (
+          id SERIAL PRIMARY KEY,
+          property_id INTEGER REFERENCES properties(id) NOT NULL,
+          unit_number TEXT NOT NULL,
+          rent_amount REAL NOT NULL,
+          status TEXT DEFAULT 'vacant' CHECK (status IN ('occupied', 'vacant'))
+        )
+      `);
+    }
     console.log('Units table created or already exists');
 
-    // Tenants
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS tenants (
-        id SERIAL PRIMARY KEY,
-        unit_id INTEGER REFERENCES units(id) NOT NULL,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        lease_start_date DATE NOT NULL,
-        lease_end_date DATE NOT NULL,
-        rent REAL NOT NULL
-      )
-    `);
+    // Tenants (depends on units)
+    if (!(await tableExists('tenants'))) {
+      await pool.query(`
+        CREATE TABLE tenants (
+          id SERIAL PRIMARY KEY,
+          unit_id INTEGER REFERENCES units(id) NOT NULL,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          lease_start_date DATE NOT NULL,
+          lease_end_date DATE NOT NULL,
+          rent REAL NOT NULL
+        )
+      `);
+    }
     console.log('Tenants table created or already exists');
 
-    // Payments
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS payments (
-        id SERIAL PRIMARY KEY,
-        tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
-        amount REAL NOT NULL,
-        payment_date DATE NOT NULL,
-        status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'late', 'pending'))
-      )
-    `);
+    // Payments (depends on tenants)
+    if (!(await tableExists('payments'))) {
+      await pool.query(`
+        CREATE TABLE payments (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+          amount REAL NOT NULL,
+          payment_date DATE NOT NULL,
+          status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'late', 'pending'))
+        )
+      `);
+    }
     console.log('Payments table created or already exists');
 
-    // Maintenance
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS maintenance (
-        id SERIAL PRIMARY KEY,
-        tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
-        property_id INTEGER REFERENCES properties(id) NOT NULL,
-        description TEXT NOT NULL,
-        request_date DATE NOT NULL,
-        status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in-progress', 'completed')),
-        cost REAL DEFAULT 0,
-        completion_date DATE
-      )
-    `);
+    // Maintenance (depends on tenants and properties)
+    if (!(await tableExists('maintenance'))) {
+      await pool.query(`
+        CREATE TABLE maintenance (
+          id SERIAL PRIMARY KEY,
+          tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+          property_id INTEGER REFERENCES properties(id) NOT NULL,
+          description TEXT NOT NULL,
+          request_date DATE NOT NULL,
+          status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in-progress', 'completed')),
+          cost REAL DEFAULT 0,
+          completion_date DATE
+        )
+      `);
+    }
     console.log('Maintenance table created or already exists');
 
-    // Associations
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS associations (
-        id SERIAL PRIMARY KEY,
-        property_id INTEGER REFERENCES properties(id) NOT NULL,
-        name TEXT NOT NULL,
-        contact_info TEXT NOT NULL,
-        fee REAL NOT NULL,
-        due_date DATE NOT NULL
-      )
-    `);
+    // Associations (depends on properties)
+    if (!(await tableExists('associations'))) {
+      await pool.query(`
+        CREATE TABLE associations (
+          id SERIAL PRIMARY KEY,
+          property_id INTEGER REFERENCES properties(id) NOT NULL,
+          name TEXT NOT NULL,
+          contact_info TEXT NOT NULL,
+          fee REAL NOT NULL,
+          due_date DATE NOT NULL
+        )
+      `);
+    }
     console.log('Associations table created or already exists');
 
-    // Owners
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS owners (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        property_id INTEGER REFERENCES properties(id) NOT NULL
-      )
-    `);
+    // Owners (depends on properties)
+    if (!(await tableExists('owners'))) {
+      await pool.query(`
+        CREATE TABLE owners (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          property_id INTEGER REFERENCES properties(id) NOT NULL
+        )
+      `);
+    }
     console.log('Owners table created or already exists');
 
-    // Board Members
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS board_members (
-        id SERIAL PRIMARY KEY,
-        name TEXT NOT NULL,
-        email TEXT NOT NULL,
-        phone TEXT NOT NULL,
-        association_id INTEGER REFERENCES associations(id) NOT NULL
-      )
-    `);
+    // Board Members (depends on associations)
+    if (!(await tableExists('board_members'))) {
+      await pool.query(`
+        CREATE TABLE board_members (
+          id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          email TEXT NOT NULL,
+          phone TEXT NOT NULL,
+          association_id INTEGER REFERENCES associations(id) NOT NULL
+        )
+      `);
+    }
     console.log('Board Members table created or already exists');
 
     console.log('All tables created or already exist');
@@ -182,94 +221,133 @@ const recreateTables = async () => {
   }
 })();
 
-// Insert dummy data sequentially after all tables are created
+// Insert dummy data sequentially with dependency checks
 (async () => {
   try {
-    console.log('Inserting dummy data sequentially...');
+    console.log('Inserting dummy data sequentially with dependency checks...');
     // Users
-    await pool.query(`
-      INSERT INTO users (email, password, role) VALUES
-      ('admin@example.com', 'password123', 'owner'),
-      ('manager@example.com', 'password123', 'manager'),
-      ('tenant@example.com', 'password123', 'tenant')
-      ON CONFLICT (email) DO NOTHING
-    `);
-    console.log('Users dummy data inserted or already exists');
+    if (await tableExists('users')) {
+      await pool.query(`
+        INSERT INTO users (email, password, role) VALUES
+        ('admin@example.com', 'password123', 'owner'),
+        ('manager@example.com', 'password123', 'manager'),
+        ('tenant@example.com', 'password123', 'tenant')
+        ON CONFLICT (email) DO NOTHING
+      `);
+      console.log('Users dummy data inserted or already exists');
+    } else {
+      console.error('Users table does not exist for insertion');
+    }
 
-    // Properties
-    await pool.query(`
-      INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES
-      ('123 Main St', 'New York', 'NY', '10001', 1, 500000),
-      ('456 Oak Ave', 'Los Angeles', 'CA', '90001', 1, 600000)
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Properties dummy data inserted or already exists');
+    // Wait for users to be available
+    await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay to ensure data is inserted
 
-    // Units
-    await pool.query(`
-      INSERT INTO units (property_id, unit_number, rent_amount, status) VALUES
-      (1, '1A', 1500, 'occupied'),
-      (1, '1B', 1400, 'vacant'),
-      (2, '2A', 1600, 'occupied'),
-      (2, '2B', 1450, 'vacant')
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Units dummy data inserted or already exists');
+    // Properties (depends on users)
+    if (await tableExists('properties')) {
+      await pool.query(`
+        INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES
+        ('123 Main St', 'New York', 'NY', '10001', 1, 500000),
+        ('456 Oak Ave', 'Los Angeles', 'CA', '90001', 1, 600000)
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Properties dummy data inserted or already exists');
+    } else {
+      console.error('Properties table does not exist for insertion');
+    }
 
-    // Tenants
-    await pool.query(`
-      INSERT INTO tenants (unit_id, name, email, phone, lease_start_date, lease_end_date, rent) VALUES
-      (1, 'John Doe', 'john@example.com', '555-0101', '2024-01-01', '2025-12-31', 1500),
-      (3, 'Jane Smith', 'jane@example.com', '555-0102', '2024-02-01', '2025-12-31', 1600)
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Tenants dummy data inserted or already exists');
+    // Units (depends on properties)
+    if (await tableExists('units')) {
+      await pool.query(`
+        INSERT INTO units (property_id, unit_number, rent_amount, status) VALUES
+        (1, '1A', 1500, 'occupied'),
+        (1, '1B', 1400, 'vacant'),
+        (2, '2A', 1600, 'occupied'),
+        (2, '2B', 1450, 'vacant')
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Units dummy data inserted or already exists');
+    } else {
+      console.error('Units table does not exist for insertion');
+    }
 
-    // Payments
-    await pool.query(`
-      INSERT INTO payments (tenant_id, amount, payment_date, status) VALUES
-      (1, 1500, '2025-02-01', 'paid'),
-      (2, 1600, '2025-02-01', 'paid'),
-      (1, 1500, '2025-01-01', 'paid')
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Payments dummy data inserted or already exists');
+    // Tenants (depends on units)
+    if (await tableExists('tenants')) {
+      await pool.query(`
+        INSERT INTO tenants (unit_id, name, email, phone, lease_start_date, lease_end_date, rent) VALUES
+        (1, 'John Doe', 'john@example.com', '555-0101', '2024-01-01', '2025-12-31', 1500),
+        (3, 'Jane Smith', 'jane@example.com', '555-0102', '2024-02-01', '2025-12-31', 1600)
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Tenants dummy data inserted or already exists');
+    } else {
+      console.error('Tenants table does not exist for insertion');
+    }
 
-    // Maintenance
-    await pool.query(`
-      INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES
-      (1, 1, 'Fix leaky faucet', '2025-01-15', 'completed', 150, '2025-01-20'),
-      (2, 2, 'Repair AC', '2025-02-10', 'in-progress', 300, NULL)
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Maintenance dummy data inserted or already exists');
+    // Payments (depends on tenants)
+    if (await tableExists('payments')) {
+      await pool.query(`
+        INSERT INTO payments (tenant_id, amount, payment_date, status) VALUES
+        (1, 1500, '2025-02-01', 'paid'),
+        (2, 1600, '2025-02-01', 'paid'),
+        (1, 1500, '2025-01-01', 'paid')
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Payments dummy data inserted or already exists');
+    } else {
+      console.error('Payments table does not exist for insertion');
+    }
 
-    // Associations
-    await pool.query(`
-      INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES
-      (1, 'Main St HOA', 'hoa@mainst.com, 555-0201', 200, '2025-03-01'),
-      (2, 'Oak Ave Association', 'oa@oakave.com, 555-0202', 250, '2025-03-01')
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Associations dummy data inserted or already exists');
+    // Maintenance (depends on tenants and properties)
+    if (await tableExists('maintenance')) {
+      await pool.query(`
+        INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES
+        (1, 1, 'Fix leaky faucet', '2025-01-15', 'completed', 150, '2025-01-20'),
+        (2, 2, 'Repair AC', '2025-02-10', 'in-progress', 300, NULL)
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Maintenance dummy data inserted or already exists');
+    } else {
+      console.error('Maintenance table does not exist for insertion');
+    }
 
-    // Owners
-    await pool.query(`
-      INSERT INTO owners (name, email, phone, property_id) VALUES
-      ('Alice Johnson', 'alice@example.com', '555-0301', 1),
-      ('Bob Wilson', 'bob@example.com', '555-0302', 2)
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Owners dummy data inserted or already exists');
+    // Associations (depends on properties)
+    if (await tableExists('associations')) {
+      await pool.query(`
+        INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES
+        (1, 'Main St HOA', 'hoa@mainst.com, 555-0201', 200, '2025-03-01'),
+        (2, 'Oak Ave Association', 'oa@oakave.com, 555-0202', 250, '2025-03-01')
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Associations dummy data inserted or already exists');
+    } else {
+      console.error('Associations table does not exist for insertion');
+    }
 
-    // Board Members
-    await pool.query(`
-      INSERT INTO board_members (name, email, phone, association_id) VALUES
-      ('Carol Davis', 'carol@example.com', '555-0401', 1),
-      ('David Brown', 'david@example.com', '555-0402', 2)
-      ON CONFLICT (id) DO NOTHING
-    `);
-    console.log('Board Members dummy data inserted or already exists');
+    // Owners (depends on properties)
+    if (await tableExists('owners')) {
+      await pool.query(`
+        INSERT INTO owners (name, email, phone, property_id) VALUES
+        ('Alice Johnson', 'alice@example.com', '555-0301', 1),
+        ('Bob Wilson', 'bob@example.com', '555-0302', 2)
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Owners dummy data inserted or already exists');
+    } else {
+      console.error('Owners table does not exist for insertion');
+    }
+
+    // Board Members (depends on associations)
+    if (await tableExists('board_members')) {
+      await pool.query(`
+        INSERT INTO board_members (name, email, phone, association_id) VALUES
+        ('Carol Davis', 'carol@example.com', '555-0401', 1),
+        ('David Brown', 'david@example.com', '555-0402', 2)
+        ON CONFLICT (id) DO NOTHING
+      `);
+      console.log('Board Members dummy data inserted or already exists');
+    } else {
+      console.error('Board Members table does not exist for insertion');
+    }
 
     console.log('All dummy data inserted or already exists');
   } catch (err) {
@@ -330,6 +408,15 @@ app.get('/schema/properties', async (req, res) => {
 app.get('/schema/payments', async (req, res) => {
   try {
     const schema = await checkTableSchema('payments');
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Diagnostic endpoint to check maintenance table schema
+app.get('/schema/maintenance', async (req, res) => {
+  try {
+    const schema = await checkTableSchema('maintenance');
     res.json(schema);
   } catch (err) {
     res.status(500).send(err.message);
