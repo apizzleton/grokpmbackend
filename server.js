@@ -16,9 +16,31 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false } // Required for Render’s PostgreSQL
 });
 
+// Function to drop and recreate tables (for Render deployment)
+const recreateTables = async () => {
+  try {
+    console.log('Dropping existing tables...');
+    await pool.query('DROP TABLE IF EXISTS board_members CASCADE');
+    await pool.query('DROP TABLE IF EXISTS owners CASCADE');
+    await pool.query('DROP TABLE IF EXISTS associations CASCADE');
+    await pool.query('DROP TABLE IF EXISTS maintenance CASCADE');
+    await pool.query('DROP TABLE IF EXISTS payments CASCADE');
+    await pool.query('DROP TABLE IF EXISTS tenants CASCADE');
+    await pool.query('DROP TABLE IF EXISTS units CASCADE');
+    await pool.query('DROP TABLE IF EXISTS properties CASCADE');
+    await pool.query('DROP TABLE IF EXISTS users CASCADE');
+    console.log('Tables dropped successfully.');
+  } catch (err) {
+    console.error('Error dropping tables:', err);
+  }
+};
+
 // Create tables for all entities
 (async () => {
   try {
+    // Drop and recreate tables to ensure schema matches
+    await recreateTables();
+
     console.log('Creating tables...');
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
@@ -208,7 +230,7 @@ app.post('/login', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email, password]);
     if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET || 'your-secret-here', { expiresIn: '1h' });
+    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, 'MySecretKey2025!', { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
     res.status(500).send(err.message);
@@ -222,7 +244,7 @@ const authenticateToken = (req, res, next) => {
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
 
-  jwt.verify(token, process.env.JWT_SECRET || 'your-secret-here', (err, user) => {
+  jwt.verify(token, 'MySecretKey2025!', (err, user) => {
     if (err) return res.status(403).json({ error: 'Invalid token' });
     req.user = user;
     next();
