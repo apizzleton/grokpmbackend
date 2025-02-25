@@ -5,10 +5,9 @@ require('dotenv').config();
 const app = express();
 app.use(express.json());
 
-// Enable CORS for localhost:3000 (and optionally all origins)
+// Enable CORS for localhost:3000 and production URL
 app.use(cors({
-  origin: 'http://localhost:3000' // Allow only localhost:3000 for now
-  // For all origins, use: origin: '*'
+  origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'] // Allow both local and live frontend
 }));
 
 const pool = new Pool({
@@ -16,23 +15,46 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Create properties, tenants, and payments tables
+// Create tables for properties, units, tenants, payments, maintenance, and associations
 (async () => {
   try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE,
+        password TEXT,
+        role TEXT DEFAULT 'owner' CHECK (role IN ('owner', 'manager', 'tenant'))
+      )
+    `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS properties (
         id SERIAL PRIMARY KEY,
         address TEXT,
-        units INTEGER,
-        owner_id INTEGER,
+        city TEXT,
+        state TEXT,
+        zip TEXT,
+        owner_id INTEGER REFERENCES users(id),
         value REAL
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS units (
+        id SERIAL PRIMARY KEY,
+        property_id INTEGER REFERENCES properties(id),
+        unit_number TEXT,
+        rent_amount REAL,
+        status TEXT DEFAULT 'vacant' CHECK (status IN ('occupied', 'vacant'))
       )
     `);
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tenants (
         id SERIAL PRIMARY KEY,
+        unit_id INTEGER REFERENCES units(id),
         name TEXT,
-        property_id INTEGER REFERENCES properties(id),
+        email TEXT,
+        phone TEXT,
+        lease_start_date DATE,
+        lease_end_date DATE,
         rent REAL
       )
     `);
@@ -42,32 +64,80 @@ const pool = new Pool({
         tenant_id INTEGER REFERENCES tenants(id),
         amount REAL,
         payment_date DATE,
-        status TEXT DEFAULT 'paid'
+        status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'late', 'pending'))
       )
     `);
-    console.log('Properties, Tenants, and Payments tables created or already exist');
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS maintenance (
+        id SERIAL PRIMARY KEY,
+        tenant_id INTEGER REFERENCES tenants(id),
+        property_id INTEGER REFERENCES properties(id),
+        description TEXT,
+        request_date DATE,
+        status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in-progress', 'completed')),
+        cost REAL,
+        completion_date DATE
+      )
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS associations (
+        id SERIAL PRIMARY KEY,
+        property_id INTEGER REFERENCES properties(id),
+        name TEXT,
+        contact_info TEXT,
+        fee REAL,
+        due_date DATE
+      )
+    `);
+    console.log('All tables created or already exist');
   } catch (err) {
     console.error('Table creation failed:', err);
   }
 })();
 
-// Get all properties
-app.get('/properties', async (req, res) => {
+// User Authentication (Basic JWT)
+const jwt = require('jsonwebtoken');
+app.post('/login', async (req, res) => {
+  const { email, password } = req.body;
   try {
-    const { rows } = await pool.query('SELECT * FROM properties');
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email, password]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
+    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET || 'secret', { expiresIn: '1h' });
+    res.json({ token });
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Middleware for authentication
+const authenticateToken = (req, res, next) => {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+  if (!token) return res.status(401).json({ error: 'No token provided' });
+
+  jwt.verify(token, process.env.JWT_SECRET || 'secret', (err, user) => {
+    if (err) return res.status(403).json({ error: 'Invalid token' });
+    req.user = user;
+    next();
+  });
+};
+
+// Properties
+app.get('/properties', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM properties WHERE owner_id = $1', [req.user.id]);
     res.json(rows);
   } catch (err) {
     res.status(500).send(err.message);
   }
 });
 
-// Add a property
-app.post('/properties', async (req, res) => {
-  const { address, units, owner_id, value } = req.body;
+app.post('/properties', authenticateToken, async (req, res) => {
+  const { address, city, state, zip, owner_id, value } = req.body;
   try {
     const { rows } = await pool.query(
-      'INSERT INTO properties (address, units, owner_id, value) VALUES ($1, $2, $3, $4) RETURNING *',
-      [address, units, owner_id, value]
+      'INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
+      [address, city, state, zip, owner_id, value]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -75,8 +145,31 @@ app.post('/properties', async (req, res) => {
   }
 });
 
-// Get all tenants
-app.get('/tenants', async (req, res) => {
+// Units
+app.get('/units', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM units');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+app.post('/units', authenticateToken, async (req, res) => {
+  const { property_id, unit_number, rent_amount, status } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO units (property_id, unit_number, rent_amount, status) VALUES ($1, $2, $3, $4) RETURNING *',
+      [property_id, unit_number, rent_amount, status || 'vacant']
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Tenants
+app.get('/tenants', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM tenants');
     res.json(rows);
@@ -85,13 +178,12 @@ app.get('/tenants', async (req, res) => {
   }
 });
 
-// Add a tenant
-app.post('/tenants', async (req, res) => {
-  const { name, property_id, rent } = req.body;
+app.post('/tenants', authenticateToken, async (req, res) => {
+  const { unit_id, name, email, phone, lease_start_date, lease_end_date, rent } = req.body;
   try {
     const { rows } = await pool.query(
-      'INSERT INTO tenants (name, property_id, rent) VALUES ($1, $2, $3) RETURNING *',
-      [name, property_id, rent]
+      'INSERT INTO tenants (unit_id, name, email, phone, lease_start_date, lease_end_date, rent) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [unit_id, name, email, phone, lease_start_date, lease_end_date, rent]
     );
     res.status(201).json(rows[0]);
   } catch (err) {
@@ -99,8 +191,8 @@ app.post('/tenants', async (req, res) => {
   }
 });
 
-// Get all payments
-app.get('/payments', async (req, res) => {
+// Payments
+app.get('/payments', authenticateToken, async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM payments');
     res.json(rows);
@@ -109,15 +201,76 @@ app.get('/payments', async (req, res) => {
   }
 });
 
-// Add a payment
-app.post('/payments', async (req, res) => {
-  const { tenant_id, amount, payment_date, status = 'paid' } = req.body;
+app.post('/payments', authenticateToken, async (req, res) => {
+  const { tenant_id, amount, payment_date, status } = req.body;
   try {
     const { rows } = await pool.query(
       'INSERT INTO payments (tenant_id, amount, payment_date, status) VALUES ($1, $2, $3, $4) RETURNING *',
-      [tenant_id, amount, payment_date, status]
+      [tenant_id, amount, payment_date, status || 'paid']
     );
     res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Maintenance
+app.get('/maintenance', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM maintenance');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+app.post('/maintenance', authenticateToken, async (req, res) => {
+  const { tenant_id, property_id, description, request_date, status, cost, completion_date } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *',
+      [tenant_id, property_id, description, request_date, status || 'pending', cost || 0, completion_date]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Associations
+app.get('/associations', authenticateToken, async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM associations');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+app.post('/associations', authenticateToken, async (req, res) => {
+  const { property_id, name, contact_info, fee, due_date } = req.body;
+  try {
+    const { rows } = await pool.query(
+      'INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+      [property_id, name, contact_info, fee, due_date]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Reporting (Basic Example)
+app.get('/reports', authenticateToken, async (req, res) => {
+  try {
+    const { rows: paymentRows } = await pool.query('SELECT SUM(amount) AS total_rent FROM payments WHERE status = $1', ['paid']);
+    const { rows: tenantRows } = await pool.query('SELECT COUNT(*) AS total_tenants FROM tenants');
+    const { rows: propertyRows } = await pool.query('SELECT COUNT(*) AS total_properties FROM properties');
+    res.json({
+      totalRent: paymentRows[0].total_rent || 0,
+      totalTenants: tenantRows[0].total_tenants || 0,
+      totalProperties: propertyRows[0].total_properties || 0,
+    });
   } catch (err) {
     res.status(500).send(err.message);
   }
