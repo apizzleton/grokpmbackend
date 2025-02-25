@@ -32,6 +32,22 @@ const checkTableSchema = async (tableName) => {
   }
 };
 
+// Function to check if a table exists
+const tableExists = async (tableName) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT EXISTS (
+        SELECT FROM pg_tables
+        WHERE schemaname = 'public' AND tablename = $1
+      )
+    `, [tableName]);
+    return rows[0].exists;
+  } catch (err) {
+    console.error(`Error checking if ${tableName} exists:`, err);
+    return false;
+  }
+};
+
 // Function to drop and recreate tables (for Render deployment)
 const recreateTables = async () => {
   try {
@@ -55,26 +71,9 @@ const recreateTables = async () => {
   }
 };
 
-// Function to check if a table exists
-const tableExists = async (tableName) => {
-  try {
-    const { rows } = await pool.query(`
-      SELECT EXISTS (
-        SELECT FROM pg_tables
-        WHERE schemaname = 'public' AND tablename = $1
-      )
-    `, [tableName]);
-    return rows[0].exists;
-  } catch (err) {
-    console.error(`Error checking if ${tableName} exists:`, err);
-    return false;
-  }
-};
-
-// Create and populate tables sequentially with dependency checks
+// Create tables sequentially with dependency checks
 (async () => {
   try {
-    // Drop and recreate tables to ensure schema matches
     await recreateTables();
 
     console.log('Creating tables sequentially with dependency checks...');
@@ -90,9 +89,6 @@ const tableExists = async (tableName) => {
       `);
     }
     console.log('Users table created or already exists');
-
-    // Wait for users to be available
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay to ensure table is ready
 
     // Properties (depends on users)
     if (!(await tableExists('properties'))) {
@@ -221,9 +217,12 @@ const tableExists = async (tableName) => {
   }
 })();
 
-// Insert dummy data sequentially with dependency checks
+// Insert dummy data sequentially with transactions and dependency checks
 (async () => {
   try {
+    console.log('Starting transaction for dummy data insertion...');
+    await pool.query('BEGIN');
+
     console.log('Inserting dummy data sequentially with dependency checks...');
     // Users
     if (await tableExists('users')) {
@@ -237,13 +236,16 @@ const tableExists = async (tableName) => {
       console.log('Users dummy data inserted or already exists');
     } else {
       console.error('Users table does not exist for insertion');
+      throw new Error('Users table missing');
     }
-
-    // Wait for users to be available
-    await new Promise(resolve => setTimeout(resolve, 1000)); // Small delay to ensure data is inserted
 
     // Properties (depends on users)
     if (await tableExists('properties')) {
+      // Verify users.id = 1 exists before inserting properties
+      const userCheck = await pool.query('SELECT id FROM users WHERE id = 1');
+      if (userCheck.rows.length === 0) {
+        throw new Error('User with ID 1 does not exist for properties insertion');
+      }
       await pool.query(`
         INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES
         ('123 Main St', 'New York', 'NY', '10001', 1, 500000),
@@ -253,6 +255,7 @@ const tableExists = async (tableName) => {
       console.log('Properties dummy data inserted or already exists');
     } else {
       console.error('Properties table does not exist for insertion');
+      throw new Error('Properties table missing');
     }
 
     // Units (depends on properties)
@@ -268,6 +271,7 @@ const tableExists = async (tableName) => {
       console.log('Units dummy data inserted or already exists');
     } else {
       console.error('Units table does not exist for insertion');
+      throw new Error('Units table missing');
     }
 
     // Tenants (depends on units)
@@ -281,6 +285,7 @@ const tableExists = async (tableName) => {
       console.log('Tenants dummy data inserted or already exists');
     } else {
       console.error('Tenants table does not exist for insertion');
+      throw new Error('Tenants table missing');
     }
 
     // Payments (depends on tenants)
@@ -295,10 +300,17 @@ const tableExists = async (tableName) => {
       console.log('Payments dummy data inserted or already exists');
     } else {
       console.error('Payments table does not exist for insertion');
+      throw new Error('Payments table missing');
     }
 
     // Maintenance (depends on tenants and properties)
     if (await tableExists('maintenance')) {
+      // Verify tenant_id and property_id exist before inserting maintenance
+      const tenantCheck = await pool.query('SELECT id FROM tenants WHERE id IN (1, 2)');
+      const propertyCheck = await pool.query('SELECT id FROM properties WHERE id IN (1, 2)');
+      if (tenantCheck.rows.length < 2 || propertyCheck.rows.length < 2) {
+        throw new Error('Required tenants or properties missing for maintenance insertion');
+      }
       await pool.query(`
         INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES
         (1, 1, 'Fix leaky faucet', '2025-01-15', 'completed', 150, '2025-01-20'),
@@ -308,6 +320,7 @@ const tableExists = async (tableName) => {
       console.log('Maintenance dummy data inserted or already exists');
     } else {
       console.error('Maintenance table does not exist for insertion');
+      throw new Error('Maintenance table missing');
     }
 
     // Associations (depends on properties)
@@ -321,6 +334,7 @@ const tableExists = async (tableName) => {
       console.log('Associations dummy data inserted or already exists');
     } else {
       console.error('Associations table does not exist for insertion');
+      throw new Error('Associations table missing');
     }
 
     // Owners (depends on properties)
@@ -334,6 +348,7 @@ const tableExists = async (tableName) => {
       console.log('Owners dummy data inserted or already exists');
     } else {
       console.error('Owners table does not exist for insertion');
+      throw new Error('Owners table missing');
     }
 
     // Board Members (depends on associations)
@@ -347,11 +362,16 @@ const tableExists = async (tableName) => {
       console.log('Board Members dummy data inserted or already exists');
     } else {
       console.error('Board Members table does not exist for insertion');
+      throw new Error('Board Members table missing');
     }
 
-    console.log('All dummy data inserted or already exists');
+    // Commit the transaction
+    await pool.query('COMMIT');
+    console.log('All dummy data transaction committed successfully');
   } catch (err) {
-    console.error('Dummy data insertion failed:', err);
+    console.error('Dummy data insertion failed, rolling back transaction:', err);
+    await pool.query('ROLLBACK');
+    throw err; // Re-throw to log the error and stop the process if needed
   }
 })();
 
@@ -408,6 +428,7 @@ app.get('/schema/properties', async (req, res) => {
 app.get('/schema/payments', async (req, res) => {
   try {
     const schema = await checkTableSchema('payments');
+    res.json(schema);
   } catch (err) {
     res.status(500).send(err.message);
   }
@@ -418,6 +439,17 @@ app.get('/schema/maintenance', async (req, res) => {
   try {
     const schema = await checkTableSchema('maintenance');
     res.json(schema);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Diagnostic endpoint to return all data from a table
+app.get('/data/:table', async (req, res) => {
+  const { table } = req.params;
+  try {
+    const { rows } = await pool.query(`SELECT * FROM ${table}`);
+    res.json(rows);
   } catch (err) {
     res.status(500).send(err.message);
   }
