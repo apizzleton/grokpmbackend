@@ -15,9 +15,29 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Create tables for all entities (unchanged)
+// Function to drop and recreate tables (for development, use cautiously)
+const recreateTables = async () => {
+  try {
+    await pool.query('DROP TABLE IF EXISTS board_members CASCADE');
+    await pool.query('DROP TABLE IF EXISTS owners CASCADE');
+    await pool.query('DROP TABLE IF EXISTS associations CASCADE');
+    await pool.query('DROP TABLE IF EXISTS maintenance CASCADE');
+    await pool.query('DROP TABLE IF EXISTS payments CASCADE');
+    await pool.query('DROP TABLE IF EXISTS tenants CASCADE');
+    await pool.query('DROP TABLE IF EXISTS units CASCADE');
+    await pool.query('DROP TABLE IF EXISTS properties CASCADE');
+    await pool.query('DROP TABLE IF EXISTS users CASCADE');
+  } catch (err) {
+    console.error('Error dropping tables:', err);
+  }
+};
+
+// Create tables for all entities
 (async () => {
   try {
+    // Optionally recreate tables for development (comment out for production)
+    // await recreateTables();
+
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
@@ -113,10 +133,10 @@ const pool = new Pool({
   }
 })();
 
-// Insert dummy data (unchanged)
+// Insert dummy data
 (async () => {
   try {
-    // Users (for authentication, but not needed for now)
+    // Users
     await pool.query(`
       INSERT INTO users (email, password, role) VALUES
       ('admin@example.com', 'password123', 'owner'),
