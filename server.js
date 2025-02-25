@@ -16,9 +16,27 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false } // Required for Render’s PostgreSQL
 });
 
+// Function to check current schema of a table
+const checkTableSchema = async (tableName) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT column_name, data_type
+      FROM information_schema.columns
+      WHERE table_name = $1
+    `, [tableName]);
+    console.log(`Current schema for ${tableName}:`, rows);
+    return rows;
+  } catch (err) {
+    console.error(`Error checking schema for ${tableName}:`, err);
+    return [];
+  }
+};
+
 // Function to drop and recreate tables (for Render deployment)
 const recreateTables = async () => {
   try {
+    console.log('Checking current schema before dropping tables...');
+    const propertiesSchema = await checkTableSchema('properties');
     console.log('Dropping existing tables...');
     await pool.query('DROP TABLE IF EXISTS board_members CASCADE');
     await pool.query('DROP TABLE IF EXISTS owners CASCADE');
@@ -42,93 +60,102 @@ const recreateTables = async () => {
     await recreateTables();
 
     console.log('Creating tables...');
+    // Users
     await pool.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE,
-        password TEXT,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
         role TEXT DEFAULT 'owner' CHECK (role IN ('owner', 'manager', 'tenant'))
       )
     `);
+    // Properties
     await pool.query(`
       CREATE TABLE IF NOT EXISTS properties (
         id SERIAL PRIMARY KEY,
-        address TEXT,
-        city TEXT,
-        state TEXT,
-        zip TEXT,
+        address TEXT NOT NULL,
+        city TEXT NOT NULL,
+        state TEXT NOT NULL,
+        zip TEXT NOT NULL,
         owner_id INTEGER REFERENCES users(id),
-        value REAL
+        value REAL NOT NULL
       )
     `);
+    // Units
     await pool.query(`
       CREATE TABLE IF NOT EXISTS units (
         id SERIAL PRIMARY KEY,
-        property_id INTEGER REFERENCES properties(id),
-        unit_number TEXT,
-        rent_amount REAL,
+        property_id INTEGER REFERENCES properties(id) NOT NULL,
+        unit_number TEXT NOT NULL,
+        rent_amount REAL NOT NULL,
         status TEXT DEFAULT 'vacant' CHECK (status IN ('occupied', 'vacant'))
       )
     `);
+    // Tenants
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tenants (
         id SERIAL PRIMARY KEY,
-        unit_id INTEGER REFERENCES units(id),
-        name TEXT,
-        email TEXT,
-        phone TEXT,
-        lease_start_date DATE,
-        lease_end_date DATE,
-        rent REAL
+        unit_id INTEGER REFERENCES units(id) NOT NULL,
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        lease_start_date DATE NOT NULL,
+        lease_end_date DATE NOT NULL,
+        rent REAL NOT NULL
       )
     `);
+    // Payments
     await pool.query(`
       CREATE TABLE IF NOT EXISTS payments (
         id SERIAL PRIMARY KEY,
-        tenant_id INTEGER REFERENCES tenants(id),
-        amount REAL,
-        payment_date DATE,
+        tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+        amount REAL NOT NULL,
+        payment_date DATE NOT NULL,
         status TEXT DEFAULT 'paid' CHECK (status IN ('paid', 'late', 'pending'))
       )
     `);
+    // Maintenance
     await pool.query(`
       CREATE TABLE IF NOT EXISTS maintenance (
         id SERIAL PRIMARY KEY,
-        tenant_id INTEGER REFERENCES tenants(id),
-        property_id INTEGER REFERENCES properties(id),
-        description TEXT,
-        request_date DATE,
+        tenant_id INTEGER REFERENCES tenants(id) NOT NULL,
+        property_id INTEGER REFERENCES properties(id) NOT NULL,
+        description TEXT NOT NULL,
+        request_date DATE NOT NULL,
         status TEXT DEFAULT 'pending' CHECK (status IN ('pending', 'in-progress', 'completed')),
-        cost REAL,
+        cost REAL DEFAULT 0,
         completion_date DATE
       )
     `);
+    // Associations
     await pool.query(`
       CREATE TABLE IF NOT EXISTS associations (
         id SERIAL PRIMARY KEY,
-        property_id INTEGER REFERENCES properties(id),
-        name TEXT,
-        contact_info TEXT,
-        fee REAL,
-        due_date DATE
+        property_id INTEGER REFERENCES properties(id) NOT NULL,
+        name TEXT NOT NULL,
+        contact_info TEXT NOT NULL,
+        fee REAL NOT NULL,
+        due_date DATE NOT NULL
       )
     `);
+    // Owners
     await pool.query(`
       CREATE TABLE IF NOT EXISTS owners (
         id SERIAL PRIMARY KEY,
-        name TEXT,
-        email TEXT,
-        phone TEXT,
-        property_id INTEGER REFERENCES properties(id)
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        property_id INTEGER REFERENCES properties(id) NOT NULL
       )
     `);
+    // Board Members
     await pool.query(`
       CREATE TABLE IF NOT EXISTS board_members (
         id SERIAL PRIMARY KEY,
-        name TEXT,
-        email TEXT,
-        phone TEXT,
-        association_id INTEGER REFERENCES associations(id)
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,
+        phone TEXT NOT NULL,
+        association_id INTEGER REFERENCES associations(id) NOT NULL
       )
     `);
     console.log('All tables created or already exist');
@@ -257,6 +284,16 @@ app.get('/properties', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM properties');
     res.json(rows);
+  } catch (err) {
+    res.status(500).send(err.message);
+  }
+});
+
+// Diagnostic endpoint to check properties table schema
+app.get('/schema/properties', async (req, res) => {
+  try {
+    const schema = await checkTableSchema('properties');
+    res.json(schema);
   } catch (err) {
     res.status(500).send(err.message);
   }
