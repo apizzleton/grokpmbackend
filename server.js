@@ -48,33 +48,47 @@ const tableExists = async (tableName) => {
   }
 };
 
-// Function to drop and recreate tables (for Render deployment)
-const recreateTables = async () => {
+// Function to drop tables with retry for deadlocks
+const dropTablesWithRetry = async (retries = 3, delay = 1000) => {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      console.log(`Attempt ${attempt} to drop tables...`);
+      await pool.query('DROP TABLE IF EXISTS board_members CASCADE');
+      await pool.query('DROP TABLE IF EXISTS owners CASCADE');
+      await pool.query('DROP TABLE IF EXISTS associations CASCADE');
+      await pool.query('DROP TABLE IF EXISTS maintenance CASCADE');
+      await pool.query('DROP TABLE IF EXISTS payments CASCADE');
+      await pool.query('DROP TABLE IF EXISTS tenants CASCADE');
+      await pool.query('DROP TABLE IF EXISTS units CASCADE');
+      await pool.query('DROP TABLE IF EXISTS properties CASCADE');
+      await pool.query('DROP TABLE IF EXISTS users CASCADE');
+      console.log('Tables dropped successfully.');
+      return;
+    } catch (err) {
+      if (err.code === '40P01' && attempt < retries) { // Deadlock detected
+        console.error(`Deadlock detected on attempt ${attempt}, retrying in ${delay}ms...`, err);
+        await new Promise(resolve => setTimeout(resolve, delay));
+        continue;
+      }
+      console.error('Error dropping tables after retries:', err);
+      throw err;
+    }
+  }
+};
+
+// Create and populate all tables and data in a single transaction
+(async () => {
   try {
+    console.log('Starting transaction for schema and data creation...');
+    await pool.query('BEGIN');
+
     console.log('Checking current schema before dropping tables...');
     const propertiesSchema = await checkTableSchema('properties');
     const paymentsSchema = await checkTableSchema('payments');
     const maintenanceSchema = await checkTableSchema('maintenance');
-    console.log('Dropping existing tables...');
-    await pool.query('DROP TABLE IF EXISTS board_members CASCADE');
-    await pool.query('DROP TABLE IF EXISTS owners CASCADE');
-    await pool.query('DROP TABLE IF EXISTS associations CASCADE');
-    await pool.query('DROP TABLE IF EXISTS maintenance CASCADE');
-    await pool.query('DROP TABLE IF EXISTS payments CASCADE');
-    await pool.query('DROP TABLE IF EXISTS tenants CASCADE');
-    await pool.query('DROP TABLE IF EXISTS units CASCADE');
-    await pool.query('DROP TABLE IF EXISTS properties CASCADE');
-    await pool.query('DROP TABLE IF EXISTS users CASCADE');
-    console.log('Tables dropped successfully.');
-  } catch (err) {
-    console.error('Error dropping tables:', err);
-  }
-};
 
-// Create tables sequentially with dependency checks
-(async () => {
-  try {
-    await recreateTables();
+    console.log('Dropping tables with retry for deadlocks...');
+    await dropTablesWithRetry();
 
     console.log('Creating tables sequentially with dependency checks...');
     // Users
@@ -89,6 +103,16 @@ const recreateTables = async () => {
       `);
     }
     console.log('Users table created or already exists');
+
+    // Insert users to ensure id = 1 exists
+    await pool.query(`
+      INSERT INTO users (email, password, role) VALUES
+      ('admin@example.com', 'password123', 'owner'),
+      ('manager@example.com', 'password123', 'manager'),
+      ('tenant@example.com', 'password123', 'tenant')
+      ON CONFLICT (email) DO UPDATE SET id = EXCLUDED.id
+    `);
+    console.log('Users dummy data inserted or updated');
 
     // Properties (depends on users)
     if (!(await tableExists('properties'))) {
@@ -212,166 +236,102 @@ const recreateTables = async () => {
     console.log('Board Members table created or already exists');
 
     console.log('All tables created or already exist');
-  } catch (err) {
-    console.error('Table creation failed:', err);
-  }
-})();
 
-// Insert dummy data sequentially with transactions and dependency checks
-(async () => {
-  try {
-    console.log('Starting transaction for dummy data insertion...');
-    await pool.query('BEGIN');
-
+    // Insert dummy data within the same transaction
     console.log('Inserting dummy data sequentially with dependency checks...');
-    // Users
-    if (await tableExists('users')) {
-      await pool.query(`
-        INSERT INTO users (email, password, role) VALUES
-        ('admin@example.com', 'password123', 'owner'),
-        ('manager@example.com', 'password123', 'manager'),
-        ('tenant@example.com', 'password123', 'tenant')
-        ON CONFLICT (email) DO NOTHING
-      `);
-      console.log('Users dummy data inserted or already exists');
-    } else {
-      console.error('Users table does not exist for insertion');
-      throw new Error('Users table missing');
-    }
+    // Users (already inserted above to ensure id = 1 exists)
 
     // Properties (depends on users)
-    if (await tableExists('properties')) {
-      // Verify users.id = 1 exists before inserting properties
-      const userCheck = await pool.query('SELECT id FROM users WHERE id = 1');
-      if (userCheck.rows.length === 0) {
-        throw new Error('User with ID 1 does not exist for properties insertion');
-      }
-      await pool.query(`
-        INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES
-        ('123 Main St', 'New York', 'NY', '10001', 1, 500000),
-        ('456 Oak Ave', 'Los Angeles', 'CA', '90001', 1, 600000)
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Properties dummy data inserted or already exists');
-    } else {
-      console.error('Properties table does not exist for insertion');
-      throw new Error('Properties table missing');
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = 1');
+    if (userCheck.rows.length === 0) {
+      throw new Error('User with ID 1 does not exist for properties insertion');
     }
+    await pool.query(`
+      INSERT INTO properties (address, city, state, zip, owner_id, value) VALUES
+      ('123 Main St', 'New York', 'NY', '10001', 1, 500000),
+      ('456 Oak Ave', 'Los Angeles', 'CA', '90001', 1, 600000)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Properties dummy data inserted or already exists');
 
     // Units (depends on properties)
-    if (await tableExists('units')) {
-      await pool.query(`
-        INSERT INTO units (property_id, unit_number, rent_amount, status) VALUES
-        (1, '1A', 1500, 'occupied'),
-        (1, '1B', 1400, 'vacant'),
-        (2, '2A', 1600, 'occupied'),
-        (2, '2B', 1450, 'vacant')
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Units dummy data inserted or already exists');
-    } else {
-      console.error('Units table does not exist for insertion');
-      throw new Error('Units table missing');
-    }
+    await pool.query(`
+      INSERT INTO units (property_id, unit_number, rent_amount, status) VALUES
+      (1, '1A', 1500, 'occupied'),
+      (1, '1B', 1400, 'vacant'),
+      (2, '2A', 1600, 'occupied'),
+      (2, '2B', 1450, 'vacant')
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Units dummy data inserted or already exists');
 
     // Tenants (depends on units)
-    if (await tableExists('tenants')) {
-      await pool.query(`
-        INSERT INTO tenants (unit_id, name, email, phone, lease_start_date, lease_end_date, rent) VALUES
-        (1, 'John Doe', 'john@example.com', '555-0101', '2024-01-01', '2025-12-31', 1500),
-        (3, 'Jane Smith', 'jane@example.com', '555-0102', '2024-02-01', '2025-12-31', 1600)
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Tenants dummy data inserted or already exists');
-    } else {
-      console.error('Tenants table does not exist for insertion');
-      throw new Error('Tenants table missing');
-    }
+    await pool.query(`
+      INSERT INTO tenants (unit_id, name, email, phone, lease_start_date, lease_end_date, rent) VALUES
+      (1, 'John Doe', 'john@example.com', '555-0101', '2024-01-01', '2025-12-31', 1500),
+      (3, 'Jane Smith', 'jane@example.com', '555-0102', '2024-02-01', '2025-12-31', 1600)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Tenants dummy data inserted or already exists');
 
     // Payments (depends on tenants)
-    if (await tableExists('payments')) {
-      await pool.query(`
-        INSERT INTO payments (tenant_id, amount, payment_date, status) VALUES
-        (1, 1500, '2025-02-01', 'paid'),
-        (2, 1600, '2025-02-01', 'paid'),
-        (1, 1500, '2025-01-01', 'paid')
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Payments dummy data inserted or already exists');
-    } else {
-      console.error('Payments table does not exist for insertion');
-      throw new Error('Payments table missing');
-    }
+    await pool.query(`
+      INSERT INTO payments (tenant_id, amount, payment_date, status) VALUES
+      (1, 1500, '2025-02-01', 'paid'),
+      (2, 1600, '2025-02-01', 'paid'),
+      (1, 1500, '2025-01-01', 'paid')
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Payments dummy data inserted or already exists');
 
     // Maintenance (depends on tenants and properties)
-    if (await tableExists('maintenance')) {
-      // Verify tenant_id and property_id exist before inserting maintenance
-      const tenantCheck = await pool.query('SELECT id FROM tenants WHERE id IN (1, 2)');
-      const propertyCheck = await pool.query('SELECT id FROM properties WHERE id IN (1, 2)');
-      if (tenantCheck.rows.length < 2 || propertyCheck.rows.length < 2) {
-        throw new Error('Required tenants or properties missing for maintenance insertion');
-      }
-      await pool.query(`
-        INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES
-        (1, 1, 'Fix leaky faucet', '2025-01-15', 'completed', 150, '2025-01-20'),
-        (2, 2, 'Repair AC', '2025-02-10', 'in-progress', 300, NULL)
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Maintenance dummy data inserted or already exists');
-    } else {
-      console.error('Maintenance table does not exist for insertion');
-      throw new Error('Maintenance table missing');
+    const tenantCheck = await pool.query('SELECT id FROM tenants WHERE id IN (1, 2)');
+    const propertyCheck = await pool.query('SELECT id FROM properties WHERE id IN (1, 2)');
+    if (tenantCheck.rows.length < 2 || propertyCheck.rows.length < 2) {
+      throw new Error('Required tenants or properties missing for maintenance insertion');
     }
+    await pool.query(`
+      INSERT INTO maintenance (tenant_id, property_id, description, request_date, status, cost, completion_date) VALUES
+      (1, 1, 'Fix leaky faucet', '2025-01-15', 'completed', 150, '2025-01-20'),
+      (2, 2, 'Repair AC', '2025-02-10', 'in-progress', 300, NULL)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Maintenance dummy data inserted or already exists');
 
     // Associations (depends on properties)
-    if (await tableExists('associations')) {
-      await pool.query(`
-        INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES
-        (1, 'Main St HOA', 'hoa@mainst.com, 555-0201', 200, '2025-03-01'),
-        (2, 'Oak Ave Association', 'oa@oakave.com, 555-0202', 250, '2025-03-01')
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Associations dummy data inserted or already exists');
-    } else {
-      console.error('Associations table does not exist for insertion');
-      throw new Error('Associations table missing');
-    }
+    await pool.query(`
+      INSERT INTO associations (property_id, name, contact_info, fee, due_date) VALUES
+      (1, 'Main St HOA', 'hoa@mainst.com, 555-0201', 200, '2025-03-01'),
+      (2, 'Oak Ave Association', 'oa@oakave.com, 555-0202', 250, '2025-03-01')
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Associations dummy data inserted or already exists');
 
     // Owners (depends on properties)
-    if (await tableExists('owners')) {
-      await pool.query(`
-        INSERT INTO owners (name, email, phone, property_id) VALUES
-        ('Alice Johnson', 'alice@example.com', '555-0301', 1),
-        ('Bob Wilson', 'bob@example.com', '555-0302', 2)
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Owners dummy data inserted or already exists');
-    } else {
-      console.error('Owners table does not exist for insertion');
-      throw new Error('Owners table missing');
-    }
+    await pool.query(`
+      INSERT INTO owners (name, email, phone, property_id) VALUES
+      ('Alice Johnson', 'alice@example.com', '555-0301', 1),
+      ('Bob Wilson', 'bob@example.com', '555-0302', 2)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Owners dummy data inserted or already exists');
 
     // Board Members (depends on associations)
-    if (await tableExists('board_members')) {
-      await pool.query(`
-        INSERT INTO board_members (name, email, phone, association_id) VALUES
-        ('Carol Davis', 'carol@example.com', '555-0401', 1),
-        ('David Brown', 'david@example.com', '555-0402', 2)
-        ON CONFLICT (id) DO NOTHING
-      `);
-      console.log('Board Members dummy data inserted or already exists');
-    } else {
-      console.error('Board Members table does not exist for insertion');
-      throw new Error('Board Members table missing');
-    }
+    await pool.query(`
+      INSERT INTO board_members (name, email, phone, association_id) VALUES
+      ('Carol Davis', 'carol@example.com', '555-0401', 1),
+      ('David Brown', 'david@example.com', '555-0402', 2)
+      ON CONFLICT (id) DO NOTHING
+    `);
+    console.log('Board Members dummy data inserted or already exists');
 
-    // Commit the transaction
+    console.log('All dummy data inserted or already exists');
     await pool.query('COMMIT');
-    console.log('All dummy data transaction committed successfully');
+    console.log('Transaction committed successfully');
   } catch (err) {
-    console.error('Dummy data insertion failed, rolling back transaction:', err);
+    console.error('Error in schema and data creation, rolling back transaction:', err);
     await pool.query('ROLLBACK');
-    throw err; // Re-throw to log the error and stop the process if needed
+    throw err; // Re-throw to stop the process and log the error
   }
 })();
 
