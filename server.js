@@ -15,7 +15,7 @@ const pool = new Pool({
   ssl: { rejectUnauthorized: false }
 });
 
-// Create tables for all entities, including owners and board members
+// Create tables for all entities (unchanged)
 (async () => {
   try {
     await pool.query(`
@@ -113,10 +113,10 @@ const pool = new Pool({
   }
 })();
 
-// Insert dummy data into all tables
+// Insert dummy data (unchanged)
 (async () => {
   try {
-    // Users (for authentication)
+    // Users (for authentication, but not needed for now)
     await pool.query(`
       INSERT INTO users (email, password, role) VALUES
       ('admin@example.com', 'password123', 'owner'),
@@ -198,44 +198,46 @@ const pool = new Pool({
   }
 })();
 
-// User Authentication (Basic JWT)
+// User Authentication (Kept but bypassed for development)
 const jwt = require('jsonwebtoken');
 app.post('/login', async (req, res) => {
   const { email, password } = req.body;
   try {
     const { rows } = await pool.query('SELECT * FROM users WHERE email = $1 AND password = $2', [email, password]);
     if (rows.length === 0) return res.status(401).json({ error: 'Invalid credentials' });
-    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET || 'secret', { expiresIn: '1h' });
+    const token = jwt.sign({ id: rows[0].id, role: rows[0].role }, process.env.JWT_SECRET || 'your-secret-here', { expiresIn: '1h' });
     res.json({ token });
   } catch (err) {
     res.status(500).send(err.message);
   }
 });
 
-// Middleware for authentication
+// Middleware for authentication (commented out for development)
+/*
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
   if (!token) return res.status(401).json({ error: 'No token provided' });
 
-  jwt.verify(token, process.env.JWT_SECRET || 'secret', (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET || 'your-secret-here', (err, user) => {
     if (err) return res.status(403).json({ error: 'Invalid token' });
     req.user = user;
     next();
   });
 };
+*/
 
-// Properties, Units, Tenants, Payments, Maintenance, Associations (existing endpoints remain the same)
-app.get('/properties', authenticateToken, async (req, res) => {
+// Bypass authentication for development (remove authenticateToken from endpoints)
+app.get('/properties', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM properties WHERE owner_id = $1', [req.user.id]);
+    const { rows } = await pool.query('SELECT * FROM properties');
     res.json(rows);
   } catch (err) {
     res.status(500).send(err.message);
   }
 });
 
-app.post('/properties', authenticateToken, async (req, res) => {
+app.post('/properties', async (req, res) => {
   const { address, city, state, zip, owner_id, value } = req.body;
   try {
     const { rows } = await pool.query(
@@ -248,7 +250,7 @@ app.post('/properties', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/units', authenticateToken, async (req, res) => {
+app.get('/units', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM units');
     res.json(rows);
@@ -257,7 +259,7 @@ app.get('/units', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/units', authenticateToken, async (req, res) => {
+app.post('/units', async (req, res) => {
   const { property_id, unit_number, rent_amount, status } = req.body;
   try {
     const { rows } = await pool.query(
@@ -270,7 +272,7 @@ app.post('/units', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/tenants', authenticateToken, async (req, res) => {
+app.get('/tenants', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM tenants');
     res.json(rows);
@@ -279,7 +281,7 @@ app.get('/tenants', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/tenants', authenticateToken, async (req, res) => {
+app.post('/tenants', async (req, res) => {
   const { unit_id, name, email, phone, lease_start_date, lease_end_date, rent } = req.body;
   try {
     const { rows } = await pool.query(
@@ -292,7 +294,7 @@ app.post('/tenants', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/payments', authenticateToken, async (req, res) => {
+app.get('/payments', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM payments');
     res.json(rows);
@@ -301,7 +303,7 @@ app.get('/payments', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/payments', authenticateToken, async (req, res) => {
+app.post('/payments', async (req, res) => {
   const { tenant_id, amount, payment_date, status } = req.body;
   try {
     const { rows } = await pool.query(
@@ -314,7 +316,7 @@ app.post('/payments', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/maintenance', authenticateToken, async (req, res) => {
+app.get('/maintenance', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM maintenance');
     res.json(rows);
@@ -323,7 +325,7 @@ app.get('/maintenance', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/maintenance', authenticateToken, async (req, res) => {
+app.post('/maintenance', async (req, res) => {
   const { tenant_id, property_id, description, request_date, status, cost, completion_date } = req.body;
   try {
     const { rows } = await pool.query(
@@ -336,7 +338,7 @@ app.post('/maintenance', authenticateToken, async (req, res) => {
   }
 });
 
-app.get('/associations', authenticateToken, async (req, res) => {
+app.get('/associations', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM associations');
     res.json(rows);
@@ -345,7 +347,7 @@ app.get('/associations', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/associations', authenticateToken, async (req, res) => {
+app.post('/associations', async (req, res) => {
   const { property_id, name, contact_info, fee, due_date } = req.body;
   try {
     const { rows } = await pool.query(
@@ -358,8 +360,7 @@ app.post('/associations', authenticateToken, async (req, res) => {
   }
 });
 
-// Owners
-app.get('/owners', authenticateToken, async (req, res) => {
+app.get('/owners', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM owners');
     res.json(rows);
@@ -368,7 +369,7 @@ app.get('/owners', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/owners', authenticateToken, async (req, res) => {
+app.post('/owners', async (req, res) => {
   const { name, email, phone, property_id } = req.body;
   try {
     const { rows } = await pool.query(
@@ -381,8 +382,7 @@ app.post('/owners', authenticateToken, async (req, res) => {
   }
 });
 
-// Board Members
-app.get('/board-members', authenticateToken, async (req, res) => {
+app.get('/board-members', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM board_members');
     res.json(rows);
@@ -391,7 +391,7 @@ app.get('/board-members', authenticateToken, async (req, res) => {
   }
 });
 
-app.post('/board-members', authenticateToken, async (req, res) => {
+app.post('/board-members', async (req, res) => {
   const { name, email, phone, association_id } = req.body;
   try {
     const { rows } = await pool.query(
@@ -404,8 +404,7 @@ app.post('/board-members', authenticateToken, async (req, res) => {
   }
 });
 
-// Reporting (Basic Example)
-app.get('/reports', authenticateToken, async (req, res) => {
+app.get('/reports', async (req, res) => {
   try {
     const { rows: paymentRows } = await pool.query('SELECT SUM(amount) AS total_rent FROM payments WHERE status = $1', ['paid']);
     const { rows: tenantRows } = await pool.query('SELECT COUNT(*) AS total_tenants FROM tenants');
