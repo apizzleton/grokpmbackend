@@ -14,10 +14,13 @@ app.use(cors({
   credentials: true
 }));
 
-// Sync models and define relationships
+// Sync models and define relationships with SSL
 const syncModels = async () => {
   try {
-    await sequelize.sync({ force: false });
+    await sequelize.authenticate(); // Test connection
+    console.log("Database connection established successfully");
+
+    await sequelize.sync({ force: false }); // Use { force: false } to preserve data in production
     console.log("Database synced successfully");
 
     const accountTypes = await AccountType.findAll();
@@ -45,5 +48,5 @@ app.post("/api/transaction-types", async (req, res) => { try { res.status(201).j
 app.get("/api/transactions", async (req, res) => { try { res.json(await Transaction.findAll({ include: [Account, AccountType, TransactionType, Property] })); } catch (error) { res.status(500).send(error.message); } });
 app.post("/api/transactions", async (req, res) => { try { res.status(201).json(await Transaction.create(req.body)); } catch (error) { res.status(400).json({ error: error.message }); } });
 
-const PORT = process.env.PORT || 5000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
