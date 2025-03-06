@@ -9,14 +9,17 @@ app.use(express.json());
 // Enable CORS for local development and production
 app.use(cors({
   origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Include OPTIONS for preflight
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true,
   preflightContinue: false,
   optionsSuccessStatus: 204
 }));
 
-// Sync models and define relationships with SSL
+// Explicitly handle OPTIONS requests
+app.options('*', cors());
+
+// Sync models and define relationships
 const syncModels = async () => {
   try {
     await sequelize.authenticate();
