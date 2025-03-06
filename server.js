@@ -1,14 +1,14 @@
 const express = require("express");
 const cors = require("cors");
 require("dotenv").config();
-const { sequelize, AccountType, Account, TransactionType, Property, Transaction } = require("./models");
+const { sequelize, AccountType, Account, TransactionType, Property, Transaction } = require("./models/index");
 const app = express();
 
 app.use(express.json());
 
 // Enable CORS for local development and production
 app.use(cors({
-  origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'], // Allow local and production front-end
+  origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization'],
   credentials: true
@@ -17,10 +17,9 @@ app.use(cors({
 // Sync models and define relationships
 const syncModels = async () => {
   try {
-    await sequelize.sync({ force: false }); // Use { force: false } to preserve data in production
+    await sequelize.sync({ force: false });
     console.log("Database synced successfully");
 
-    // Seed initial data only if tables are empty (production-safe)
     const accountTypes = await AccountType.findAll();
     if (accountTypes.length === 0) {
       await AccountType.bulkCreate([{ name: "Asset" }, { name: "Liability" }, { name: "Income" }, { name: "Expense" }]);
