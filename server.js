@@ -9,18 +9,20 @@ app.use(express.json());
 // Enable CORS for local development and production
 app.use(cors({
   origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'],
-  methods: ['GET', 'POST', 'PUT', 'DELETE'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'], // Include OPTIONS for preflight
   allowedHeaders: ['Content-Type', 'Authorization'],
-  credentials: true
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204
 }));
 
 // Sync models and define relationships with SSL
 const syncModels = async () => {
   try {
-    await sequelize.authenticate(); // Test connection
+    await sequelize.authenticate();
     console.log("Database connection established successfully");
 
-    await sequelize.sync({ force: false }); // Use { force: false } to preserve data in production
+    await sequelize.sync({ force: false });
     console.log("Database synced successfully");
 
     const accountTypes = await AccountType.findAll();
