@@ -7,7 +7,7 @@ require('dotenv').config();
 
 const app = express();
 
-// Enable CORS for local development and production
+// Enable CORS with detailed configuration
 app.use(cors({
   origin: ['http://localhost:3000', 'https://grokpmfrontend.onrender.com'],
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -17,13 +17,13 @@ app.use(cors({
   optionsSuccessStatus: 204
 }));
 
-// Handle OPTIONS requests explicitly
+// Explicitly handle preflight OPTIONS requests
 app.options('*', cors());
 
 // Parse JSON requests
 app.use(express.json());
 
-// Sync models and seed initial data if necessary
+// Sync models and seed initial data
 const syncModels = async () => {
   try {
     await sequelize.authenticate();
